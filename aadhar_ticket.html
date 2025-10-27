@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aadhaar QR Ticket Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+body{font-family:Arial,Helvetica,sans-serif;margin:20px;background:#f4f4f4;}
+h2{margin-bottom:10px}
+.video{width:100%;max-height:320px;background:#000;}
+img{width:100%;max-width:400px;margin-top:10px;border-radius:8px;}
+button,input,select{margin-top:10px;padding:8px;border-radius:5px;border:1px solid #aaa;}
+.ticket{border:1px dashed #555;padding:12px;margin-top:20px;background:#fff;border-radius:8px}
+</style>
+</head>
+<body>
+
+<h2>Aadhaar → Bus Ticket (QR-based)</h2>
+<p>Upload or capture Aadhaar (with visible QR). Data will be extracted <b>only from the QR</b>.</p>
+
+<video id="video" autoplay playsinline class="video"></video><br>
+<canvas id="canvas" style="display:none"></canvas>
+
+<button id="startCam">Open Camera</button>
+<button id="captureFront" disabled>Capture Aadhaar (Front with QR)</button>
+<button id="captureBack" disabled>Capture Back (Optional)</button><br>
+
+<!-- Upload Options -->
+<input type="file" id="frontFile" accept="image/*">
+<input type="file" id="backFile" accept="image/*">
+<input type="file" id="fullAadhaar" accept="image/*"><label>Upload Full Aadhaar (with QR)</label><br>
+
+<img id="frontPreview" alt="Front Preview">
+<img id="backPreview" alt="Back Preview">
+<img id="fullPreview" alt="Full Aadhaar Preview">
+
+<div id="status">Idle</div>
+
+<h3>Extracted Info (From QR)</h3>
+<div id="info"></div>
+
+<h3>Journey</h3>
+<label>Origin:</label>
+<select id="origin"></select>
+<label>Destination:</label>
+<select id="destination"></select>
+<button id="calcFare">Generate Ticket</button>
+
+<div id="ticketArea"></div>
+
+<script>
+const stations=["Vizianagaram","Jonnada","Tagarapuvalasa","Anandapuram","Kommadi","Endada","Maddilapalem","Complex Vizag"];
+const fareTable=[30,40,50,60,70,90,100]; 
+
+const video=document.getElementById('video');
+const canvas=document.getElementById('canvas');
+let stream=null;
+
+const populateStations=()=>{
+ const o=document.getElementById('origin'),d=document.getElementById('destination');
+ stations.forEach((s,i)=>{
+   let op1=document.createElement('option'); op1.value=i; op1.textContent=s; o.appendChild(op1);
+   let op2=document.createElement('option'); op2.value=i; op2.textContent=s; d.appendChild(op2);
+ });
+ o.value=0; d.value=stations.length-1;
+};
+populateStations();
+
+document.getElementById('startCam').onclick=async()=>{
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:true});
+  video.srcObject=stream;
+  document.getElementById('captureFront').disabled=false;
+  document.getElementById('captureBack').disabled=false;
+  document.getElementById('status').innerText="Camera opened";
+ }catch(e){alert("Camera error: "+e);}
+};
+
+function captureImage(which){
+ canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+ canvas.getContext('2d').drawImage(video,0,0);
+ canvas.toBlob(async blob=>{
+  if(which==="front"){document.getElementById('frontPreview').src=URL.createObjectURL(blob); await extractQR(blob);}
+  else{document.getElementById('backPreview').src=URL.createObjectURL(blob);}
+ },'image/png');
+}
+
+document.getElementById('captureFront').onclick=()=>captureImage('front');
+document.getElementById('captureBack').onclick=()=>captureImage('back');
+
+// File upload options
+document.getElementById('frontFile').onchange=e=>{
+ const file=e.target.files[0];
+ document.getElementById('frontPreview').src=URL.createObjectURL(file);
+ extractQR(file);
+};
+document.getElementById('backFile').onchange=e=>{
+ const file=e.target.files[0];
+ document.getElementById('backPreview').src=URL.createObjectURL(file);
+};
+// Full Aadhaar upload
+document.getElementById('fullAadhaar').onchange=e=>{
+ const file=e.target.files[0];
+ document.getElementById('fullPreview').src=URL.createObjectURL(file);
+ extractQR(file);
+};
+
+let person={name:'',dob:'',gender:'',state:'',address:''};
+
+async function extractQR(file){
+ document.getElementById('status').innerText="Scanning QR...";
+ const img=new Image();
+ img.src=URL.createObjectURL(file);
+ await new Promise(r=>img.onload=r);
+ canvas.width=img.width; canvas.height=img.height;
+ const ctx=canvas.getContext('2d');
+ ctx.drawImage(img,0,0,img.width,img.height);
+ const imgData=ctx.getImageData(0,0,canvas.width,canvas.height);
+ const qr=jsQR(imgData.data,imgData.width,imgData.height);
+ if(qr){
+   document.getElementById('status').innerText="QR found!";
+   parseQRText(qr.data);
+ }else{
+   document.getElementById('status').innerText="No QR found.";
+ }
+}
+
+function parseQRText(text){
+ const t=text.replace(/\n/g,' ').trim();
+ const get=(key)=>{const m=t.match(new RegExp(key+":\\s*([^;]+)","i")); return m?m[1].trim():'';}
+ person.name=get("Name");
+ person.dob=get("DOB");
+ person.gender=get("Gender");
+ person.state=get("State");
+ person.address=get("Address");
+ showInfo();
+}
+
+function showInfo(){
+ document.getElementById('info').innerHTML=`<b>Name:</b> ${person.name}<br>
+ <b>DOB:</b> ${person.dob}<br>
+ <b>Gender:</b> ${person.gender}<br>
+ <b>State:</b> ${person.state}<br>
+ <b>Address:</b> ${person.address}`;
+}
+
+function computeAge(dob){
+ if(!dob)return 0;
+ const [d,m,y]=dob.split(/[\/\-]/).map(Number);
+ const birth=new Date(y,m-1,d);
+ const now=new Date();
+ let age=now.getFullYear()-birth.getFullYear();
+ const mo=now.getMonth()-birth.getMonth();
+ if(mo<0||(mo===0&&now.getDate()<birth.getDate()))age--;
+ return age;
+}
+
+document.getElementById('calcFare').onclick=()=>{
+ const o=parseInt(document.getElementById('origin').value);
+ const d=parseInt(document.getElementById('destination').value);
+ if(o===d){alert("Same station invalid.");return;}
+ let diff=Math.abs(o-d);
+ let fare=fareTable[Math.min(diff-1,fareTable.length-1)];
+ const age=computeAge(person.dob);
+ let reason='Standard Fare';
+ if(person.gender==='Female' && person.state==='Andhra Pradesh'){fare=0;reason='AP Female - Free';}
+ else if(age<18||age>=60){fare=Math.round(fare*0.5);reason='50% Discount';}
+ document.getElementById('ticketArea').innerHTML=`
+ <div class='ticket'>
+ <b>From:</b> ${stations[o]} → <b>To:</b> ${stations[d]}<br>
+ <b>Fare:</b> ₹${fare} (${reason})<br>
+ <b>Name:</b> ${person.name}<br>
+ <b>DOB:</b> ${person.dob} (Age: ${age})<br>
+ <b>Gender:</b> ${person.gender}<br>
+ <b>State:</b> ${person.state}<br>
+ <b>Address:</b> ${person.address}<br>
+ <button onclick="generatePDF('${stations[o]}','${stations[d]}',${fare},'${reason}')">Download Ticket PDF</button>
+ </div>`;
+};
+
+function generatePDF(from,to,fare,reason){
+ const {jsPDF}=window.jspdf;
+ const doc=new jsPDF();
+ doc.text("Bus Ticket",20,20);
+ doc.text(`Name: ${person.name}`,20,40);
+ doc.text(`DOB: ${person.dob}`,20,55);
+ doc.text(`Gender: ${person.gender}`,20,70);
+ doc.text(`State: ${person.state}`,20,85);
+ doc.text(`From: ${from}`,20,100);
+ doc.text(`To: ${to}`,20,115);
+ doc.text(`Fare: ₹${fare} (${reason})`,20,130);
+ doc.save("ticket.pdf");
+}
+</script>
+</body>
+</html>
